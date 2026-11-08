@@ -6614,7 +6614,15 @@ func (s *Server) extractRequiredEnvKeys(req CreateAgentRequest, hydratedTemplate
 		if len(hydratedHarnessConfigPath) > 0 {
 			hydratedHCPath = hydratedHarnessConfigPath[0]
 		}
-		if hcProjectDir := harnessConfigProjectTier(req.ProjectPath); hydratedHCPath != "" || hcProjectDir != "" {
+		// A hub-managed workspace root with no .scion entry has an empty
+		// project tier. The harness-config can still live in the global
+		// directory, which is where a workstation sync of a global bundle
+		// is read. Skipping the lookup in that case dropped the bundle's
+		// auth.types, so env-gather asked for nothing and the harness
+		// started without the credential. An empty project tier still
+		// resolves a hydrated copy, then the global directory.
+		hcProjectDir := harnessConfigProjectTier(req.ProjectPath)
+		if hydratedHCPath != "" || hcProjectDir != "" || harnessConfigName != "" {
 			if hcDir, err := config.ResolveHarnessConfigDir(hydratedHCPath, harnessConfigName, hcProjectDir, harnessConfigTemplatePaths...); err == nil && hcDir != nil {
 				harnessType = hcDir.Config.Harness
 				authType = hcDir.Config.AuthSelectedType
