@@ -492,6 +492,65 @@ enabled = false
 # END SCION MANAGED"""
 
 
+def _record_workspace_folder_trust(ctx: scion_harness.ProvisionContext) -> None:
+    """Trust the assigned workspace in ~/.grok/trusted_folders.toml.
+
+    Grok asks "Trust this folder?" until that store records the working
+    directory. The grant is the workspace path only.
+    """
+    import time
+
+    raw = ctx.workspace
+    if not raw or not os.path.isabs(raw):
+        ctx.info("folder trust skipped: workspace path is not absolute")
+        return
+    folder = os.path.abspath(raw)
+    home = os.path.abspath(ctx.home)
+    grok_home = os.path.abspath(_grok_config_dir(ctx))
+    if folder in ("/", home, grok_home):
+        ctx.info("folder trust skipped: refusing an over-broad path")
+        return
+    if '"' in folder or "\n" in folder:
+        ctx.info("folder trust skipped: workspace path cannot be recorded")
+        return
+
+    path = os.path.join(grok_home, "trusted_folders.toml")
+    os.makedirs(grok_home, exist_ok=True)
+    folders: dict[str, dict[str, Any]] = {}
+    if os.path.isfile(path):
+        try:
+            import tomllib
+            with open(path, "rb") as fh:
+                parsed = tomllib.load(fh)
+            raw_folders = parsed.get("folders") if isinstance(parsed, dict) else None
+            if isinstance(raw_folders, dict):
+                for key, entry in raw_folders.items():
+                    if isinstance(key, str) and isinstance(entry, dict):
+                        folders[key] = dict(entry)
+        except (OSError, ValueError):
+            ctx.info("folder trust skipped: existing trust store could not be read")
+            return
+    current = folders.get(folder, {})
+    if current.get("trusted") is True:
+        return
+    folders[folder] = {"trusted": True, "decided_at": int(time.time())}
+    lines: list[str] = []
+    for key in sorted(folders):
+        entry = folders[key]
+        escaped = key.replace("\\", "\\\\").replace('"', '\\"')
+        lines.append(f'[folders."{escaped}"]')
+        lines.append("trusted = true" if entry.get("trusted") is True else "trusted = false")
+        decided = entry.get("decided_at")
+        if isinstance(decided, int):
+            lines.append(f"decided_at = {decided}")
+        lines.append("")
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(lines))
+    except OSError as exc:
+        ctx.info(f"folder trust skipped: could not write {path}: {exc}")
+
+
 def _harden_config(ctx: scion_harness.ProvisionContext) -> None:
     """Write hardened settings to ~/.grok/config.toml with managed markers."""
     config_path = os.path.join(_grok_config_dir(ctx), "config.toml")
@@ -799,6 +858,12 @@ def provision(ctx: scion_harness.ProvisionContext) -> None:
 
     # --- Config hardening ---------------------------------------------------
     _harden_config(ctx)
+
+    # Record folder trust for this agent's workspace only. This is the
+    # same store `grok --trust` writes. It does not enable yolo,
+    # always-approve, or bypassPermissions, and it does not trust home
+    # or the filesystem root.
+    _record_workspace_folder_trust(ctx)
 
     # --- Hook wiring --------------------------------------------------------
     _write_hooks(ctx)
