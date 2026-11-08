@@ -507,6 +507,9 @@ def _record_workspace_folder_trust(ctx: scion_harness.ProvisionContext) -> None:
     folder = os.path.abspath(raw)
     home = os.path.abspath(ctx.home)
     grok_home = os.path.abspath(_grok_config_dir(ctx))
+    if os.path.islink(raw) or os.path.realpath(folder) != folder:
+        ctx.info("folder trust skipped: workspace path is a symlink or changes through one")
+        return
     if folder in ("/", home, grok_home):
         ctx.info("folder trust skipped: refusing an over-broad path")
         return

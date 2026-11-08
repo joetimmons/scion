@@ -2375,6 +2375,21 @@ class WorkspaceFolderTrustTest(unittest.TestCase):
             self.assertNotIn("/", folders)
             self.assertNotIn(home, folders)
 
+    def test_refuses_symlink_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = os.path.join(tmp, "home")
+            real = os.path.join(tmp, "real")
+            link = os.path.join(tmp, "link")
+            os.makedirs(home)
+            os.makedirs(real)
+            os.symlink(real, link)
+            ctx = _make_ctx({"agent_workspace": link})
+            with temporary_home(home):
+                provision._record_workspace_folder_trust(ctx)
+                self.assertFalse(
+                    os.path.isfile(os.path.join(home, ".grok", "trusted_folders.toml"))
+                )
+
     def test_refuses_filesystem_root_and_home(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = os.path.join(tmp, "home")
