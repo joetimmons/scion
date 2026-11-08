@@ -28,9 +28,12 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/GoogleCloudPlatform/scion/pkg/hubclient"
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
+
+	"github.com/GoogleCloudPlatform/scion/pkg/hubclient"
+	"github.com/GoogleCloudPlatform/scion/pkg/hubsync"
 )
 
 const (
@@ -46,10 +49,31 @@ var (
 	projSettingsProfile  string
 )
 
-// resolveProjectForSettings returns the Hub client and the linked project.
-// A variable so tests can point it at a fake Hub; it resolves the project
-// the same way as 'scion project identity default'.
-var resolveProjectForSettings = resolveLinkedProjectForSA
+// resolveProjectForSettings returns the Hub client and the project whose
+// settings are changed. A variable so tests can point it at a fake Hub.
+// A --project hub id uses the same authenticated hub client as the other
+// hub commands. A local directory still uses the project id stored by
+// 'scion hub link', the same resolution as 'scion project identity default'.
+var resolveProjectForSettings = resolveProjectSettingsTarget
+
+// resolveProjectSettingsTarget resolves a hub project id passed with
+// --project. A local directory keeps the linked-project lookup.
+func resolveProjectSettingsTarget() (hubclient.Client, string, error) {
+	if projectPath != "" && hubsync.IsHubProjectRef(projectPath) {
+		hubCtx, err := requireHub(projectPath)
+		if err != nil {
+			return nil, "", err
+		}
+		if hubCtx.ProjectID == "" {
+			return nil, "", fmt.Errorf("hub did not resolve a project for %q", projectPath)
+		}
+		if id, err := uuid.Parse(projectPath); err == nil && hubCtx.ProjectID != id.String() {
+			return nil, "", fmt.Errorf("hub resolved project %s, not %s", hubCtx.ProjectID, id.String())
+		}
+		return hubCtx.Client, hubCtx.ProjectID, nil
+	}
+	return resolveLinkedProjectForSA()
+}
 
 var projectSettingsCmd = &cobra.Command{
 	Use:   "settings",
