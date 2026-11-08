@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GoogleCloudPlatform/scion/pkg/api"
 	"github.com/GoogleCloudPlatform/scion/pkg/messages"
 	"github.com/GoogleCloudPlatform/scion/pkg/transfer"
 	"github.com/stretchr/testify/assert"
@@ -297,6 +298,14 @@ func TestPathEscape_Projects(t *testing.T) {
 			func(ctx context.Context, c Client, id string) { _ = p(c).DeleteAgent(ctx, id, id, nil) }},
 		{"Clone", "/api/v1/projects/{id}/clone",
 			func(ctx context.Context, c Client, id string) { _, _ = p(c).Clone(ctx, id, CloneProjectRequest{}) }},
+		{"ListSharedDirs", "/api/v1/projects/{id}/shared-dirs",
+			func(ctx context.Context, c Client, id string) { _, _ = p(c).ListSharedDirs(ctx, id) }},
+		{"CreateSharedDir", "/api/v1/projects/{id}/shared-dirs",
+			func(ctx context.Context, c Client, id string) {
+				_, _ = p(c).CreateSharedDir(ctx, id, api.SharedDir{Name: "tools"})
+			}},
+		{"DeleteSharedDir", "/api/v1/projects/{id}/shared-dirs/{id}",
+			func(ctx context.Context, c Client, id string) { _ = p(c).DeleteSharedDir(ctx, id, id) }},
 	})
 }
 
