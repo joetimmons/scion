@@ -370,6 +370,20 @@ func IsNoAuthType(s string) bool {
 	return s == AuthTypeNone
 }
 
+// ExplicitCredentialAuth reports whether s is a harness auth type that
+// asks for a credential (an API key, token, or credential file). The
+// empty string and the no-auth sentinel are not. Agent role none still
+// suppresses Hub secrets, but an explicit type must be gathered rather
+// than dropped so the harness does not start unauthenticated.
+func ExplicitCredentialAuth(s string) bool {
+	switch s {
+	case "api-key", "oauth-token", "auth-file", "vertex-ai":
+		return true
+	default:
+		return false
+	}
+}
+
 // ValidateAuth checks a ResolvedAuth for completeness before container launch.
 // It acts as a post-resolution safety net: ResolveAuth should produce correct
 // results, but ValidateAuth catches any bugs or race conditions (e.g., a

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net/url"
 
+	"github.com/GoogleCloudPlatform/scion/pkg/api"
 	"github.com/GoogleCloudPlatform/scion/pkg/apiclient"
 )
 
@@ -43,6 +44,20 @@ type ProjectService interface {
 	// Delete removes a project and its agent records. Without opts.Force
 	// the hub refuses (409) while the project has agents not yet deleted.
 	Delete(ctx context.Context, projectID string, opts *DeleteProjectOptions) error
+
+	// ListSharedDirs returns the shared directories declared on the project
+	// (GET /api/v1/projects/{id}/shared-dirs). Target is the container path
+	// the hub computed. The list is empty when the project has none.
+	ListSharedDirs(ctx context.Context, projectID string) ([]HubSharedDir, error)
+
+	// CreateSharedDir declares a shared directory on the project
+	// (POST /api/v1/projects/{id}/shared-dirs). The hub records it and
+	// creates the leaf where it can reach the storage.
+	CreateSharedDir(ctx context.Context, projectID string, dir api.SharedDir) (*HubSharedDir, error)
+
+	// DeleteSharedDir removes one declared shared directory
+	// (DELETE /api/v1/projects/{id}/shared-dirs/{name}).
+	DeleteSharedDir(ctx context.Context, projectID, name string) error
 
 	// AssignableRoles lists the project-scoped membership roles with
 	// whether the caller could grant each one through the members PUT
@@ -537,6 +552,50 @@ type AssignableProjectRole struct {
 	Reason      string                 `json:"reason"`
 	DenialCode  string                 `json:"denialCode,omitempty"`
 	Details     map[string]interface{} `json:"details,omitempty"`
+}
+
+// HubSharedDir is one shared directory from the hub. Target is set on
+// list responses and empty on the create response, which returns the
+// stored declaration only.
+type HubSharedDir struct {
+	api.SharedDir
+	Target string `json:"target,omitempty"`
+}
+
+// ListSharedDirs returns the project's declared shared directories.
+func (s *projectService) ListSharedDirs(ctx context.Context, projectID string) ([]HubSharedDir, error) {
+	resp, err := s.c.get(ctx, "/api/v1/projects/"+url.PathEscape(projectID)+"/shared-dirs", nil)
+	if err != nil {
+		return nil, err
+	}
+	out, err := apiclient.DecodeRequired[struct {
+		SharedDirs []HubSharedDir `json:"sharedDirs"`
+	}](resp)
+	if err != nil {
+		return nil, err
+	}
+	if out.SharedDirs == nil {
+		return []HubSharedDir{}, nil
+	}
+	return out.SharedDirs, nil
+}
+
+// CreateSharedDir declares a shared directory on the project.
+func (s *projectService) CreateSharedDir(ctx context.Context, projectID string, dir api.SharedDir) (*HubSharedDir, error) {
+	resp, err := s.c.post(ctx, "/api/v1/projects/"+url.PathEscape(projectID)+"/shared-dirs", dir, nil)
+	if err != nil {
+		return nil, err
+	}
+	return apiclient.DecodeRequired[HubSharedDir](resp)
+}
+
+// DeleteSharedDir removes one declared shared directory.
+func (s *projectService) DeleteSharedDir(ctx context.Context, projectID, name string) error {
+	resp, err := s.c.delete(ctx, "/api/v1/projects/"+url.PathEscape(projectID)+"/shared-dirs/"+url.PathEscape(name), nil)
+	if err != nil {
+		return err
+	}
+	return apiclient.CheckResponse(resp)
 }
 
 // AssignableRoles lists the project's assignable membership roles.
