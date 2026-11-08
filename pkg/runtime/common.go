@@ -1827,6 +1827,31 @@ func runSimpleCommand(ctx context.Context, command string, args ...string) (stri
 	return strings.TrimSpace(string(out)), nil
 }
 
+// runCommandSeparated runs command and keeps standard output and standard
+// error apart. Container create prints the container ID on stdout and may
+// write a non-fatal warning (for example Podman's non-TTY notice) on
+// stderr. CombinedOutput merges those streams, so the warning becomes part
+// of the ID passed to later inspect and stop calls. A non-zero exit is
+// still an error; stderr is included in that error and is not discarded.
+func runCommandSeparated(ctx context.Context, command string, args ...string) (stdout, stderr string, err error) {
+	runtimeLog().Debug("Executing command", "cmd", command, "argc", len(args))
+	start := time.Now()
+	cmd := exec.CommandContext(ctx, command, args...)
+	var errBuf bytes.Buffer
+	cmd.Stderr = &errBuf
+	out, err := cmd.Output()
+	elapsed := time.Since(start)
+	if err != nil {
+		logCommandFailure(ctx, command, len(args), elapsed, append(append([]byte{}, out...), errBuf.Bytes()...))
+		return string(out), errBuf.String(), fmt.Errorf("%s failed: %w", command, err)
+	}
+	if s := strings.TrimSpace(errBuf.String()); s != "" {
+		runtimeLog().Warn("command wrote to stderr", "cmd", command, "argc", len(args), "stderr", s)
+	}
+	runtimeLog().Debug("Command completed", "cmd", command, "argc", len(args), "duration", elapsed)
+	return string(out), errBuf.String(), nil
+}
+
 // stdoutCommandTimeout bounds runStdoutCommand. A variable so tests can
 // shorten it.
 var stdoutCommandTimeout = 30 * time.Second

@@ -39,29 +39,60 @@ import (
 // from the 12-character short form to the full 64 characters.
 var containerIDPattern = regexp.MustCompile(`^[0-9a-f]{12,64}$`)
 
+// containerIDFromOutput returns the last line of stdout that is a Docker or
+// Podman container ID. A warning on another line is ignored. A line that
+// merely contains an ID is not one: the whole trimmed line must be the ID.
+func containerIDFromOutput(out string) (string, bool) {
+	lines := strings.Split(out, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if id := strings.TrimSpace(lines[i]); containerIDPattern.MatchString(id) {
+			return id, true
+		}
+	}
+	return "", false
+}
+
 // reportContainerCreated reports a Docker or Podman create (design §3.8.4:
 // "a Docker container ID"). The container ID is the handle's UID, the
-// identity DeleteResource removes by. out is the run command's output,
-// which interleaves stdout and stderr, so a warning line may surround the
-// ID: the last line that is a well-formed ID is used. If no line is, no
-// handle is recorded (the launch's cleanup cannot remove this container by
-// ID) and a warning is logged. Run itself still returns the whole trimmed
-// output; only the handle is restricted.
+// identity DeleteResource removes by. out is the run command's stdout.
+// If no line is a well-formed ID, no handle is recorded (the launch's
+// cleanup cannot remove this container by ID) and a warning is logged.
 func reportContainerCreated(hooks launchHooks, name, out string) {
 	// Report to an observer too (the synchronous path), not only to an
 	// async launch's OnResourceCreated.
 	if hooks.createdFn == nil && hooks.observedFn == nil {
 		return
 	}
-	lines := strings.Split(out, "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		if id := strings.TrimSpace(lines[i]); containerIDPattern.MatchString(id) {
-			hooks.created(api.ResourceHandle{Kind: api.ResourceKindContainer, Name: name, UID: id})
-			return
-		}
+	if id, ok := containerIDFromOutput(out); ok {
+		hooks.created(api.ResourceHandle{Kind: api.ResourceKindContainer, Name: name, UID: id})
+		return
 	}
 	runtimeLog().Warn("Container run output has no well-formed container ID; launch cleanup will not track this container",
-		"name", name, "output_lines", len(lines))
+		"name", name, "output_lines", len(strings.Split(out, "\n")))
+}
+
+// containerRunResult turns a container create's streams into the value Run
+// returns. A non-zero exit stays a failure and keeps both streams in the
+// error. On success, a well-formed container ID on stdout is the only value
+// returned, so a warning on stderr (or on another stdout line) is not
+// concatenated into the ID later passed to inspect and stop. Success with
+// no ID returns trimmed stdout alone; stderr is still left out.
+func containerRunResult(stdout, stderr string, runErr error) (string, error) {
+	if runErr != nil {
+		combined := strings.TrimSpace(stdout)
+		if s := strings.TrimSpace(stderr); s != "" {
+			if combined != "" {
+				combined += "\n" + s
+			} else {
+				combined = s
+			}
+		}
+		return "", fmt.Errorf("container run failed: %w (output: %s)", runErr, combined)
+	}
+	if id, ok := containerIDFromOutput(stdout); ok {
+		return id, nil
+	}
+	return strings.TrimSpace(stdout), nil
 }
 
 // reportAppleContainerCreated reports an Apple container create. Apple's

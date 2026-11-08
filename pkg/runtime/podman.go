@@ -209,22 +209,19 @@ func (r *PodmanRuntime) Run(ctx context.Context, config RunConfig) (string, erro
 	if err := hooks.checkpoint(ctx, CheckpointStepLaunching); err != nil {
 		return "", err
 	}
-	out, err := runSimpleCommand(ctx, r.Command, newArgs...)
-	if err != nil {
-		if ctx.Err() != nil {
-			// The caller gave up while the daemon may still have been
-			// creating/starting the container. Clean up any partial result
-			// instead of leaking it. See ptone/scion#1886.
-			rollbackCancelledCreate(r.Command, config.Name, config.Labels[api.LabelRunID])
-			return "", ctx.Err()
-		}
-		return "", fmt.Errorf("container run failed: %w (output: %s)", err, out)
+	stdout, stderr, err := runCommandSeparated(ctx, r.Command, newArgs...)
+	if err != nil && ctx.Err() != nil {
+		// The caller gave up while the daemon may still have been
+		// creating/starting the container. Clean up any partial result
+		// instead of leaking it. See ptone/scion#1886.
+		rollbackCancelledCreate(r.Command, config.Name, config.Labels[api.LabelRunID])
+		return "", ctx.Err()
 	}
-
-	// Run returns the whole trimmed output, as before; only the launch
-	// handle is restricted to a well-formed container ID line.
-	id := strings.TrimSpace(out)
-	reportContainerCreated(hooks, config.Name, out)
+	id, err := containerRunResult(stdout, stderr, err)
+	if err != nil {
+		return "", err
+	}
+	reportContainerCreated(hooks, config.Name, stdout)
 	return id, nil
 }
 
