@@ -123,3 +123,48 @@ func TestEnvGather_GrokLiteralHTTPNeedsXAIKey(t *testing.T) {
 		t.Fatalf("needs = %v, required = %v", envReqs.Needs, envReqs.Required)
 	}
 }
+
+// TestEnvGather_RoleNoneExplicitAPIKeyStillNeedsXAIKey reproduces the live
+// workstation create: --role none sets noAuth, and --harness-auth api-key
+// is also set. Env-gather must still ask for XAI_API_KEY. Without that,
+// the broker accepts an async launch and grok starts with no key.
+func TestEnvGather_RoleNoneExplicitAPIKeyStillNeedsXAIKey(t *testing.T) {
+	srv := newTestServer(t)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(home, ".scion", "projects", "box")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hcDir := filepath.Join(home, ".scion", "harness-configs", "grok-literal")
+	if err := os.MkdirAll(hcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hcDir, "config.yaml"), []byte(grokLiteralConfigYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	body := `{
+		"name": "grok-verified",
+		"id": "agent-grok-role-none",
+		"gatherEnv": true,
+		"noAuth": true,
+		"projectPath": "` + workspace + `",
+		"config": {"harnessConfig": "grok-literal", "harnessAuth": "api-key", "profile": "default"}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var envReqs EnvRequirementsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &envReqs); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(envReqs.Needs, "XAI_API_KEY") {
+		t.Fatalf("needs = %v, required = %v", envReqs.Needs, envReqs.Required)
+	}
+}
