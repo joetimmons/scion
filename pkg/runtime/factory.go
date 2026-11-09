@@ -318,13 +318,16 @@ func (s runtimeSelection) build() Runtime {
 			}
 			p.HostLimits = rtConfig.Podman
 			if p.HostLimits != nil && strings.HasPrefix(p.HostLimits.CgroupParent, "/") {
-				// An absolute parent is the delegated agents cgroup. Move
-				// this process to its server sibling before any container
-				// is created, including after a restart from a shell that
-				// is still inside that agents cgroup.
-				if err := joinDelegatedServiceCgroup(p.HostLimits.CgroupParent); err != nil {
+				// Copy before rewriting the parent. The settings value stays
+				// /scion-svc/agents; the runtime uses a writable child when
+				// this process cannot move into /scion-svc/server.
+				limits := *p.HostLimits
+				parent, err := placePodmanCgroup(limits.CgroupParent)
+				if err != nil {
 					return &ErrorRuntime{Err: err}
 				}
+				limits.CgroupParent = parent
+				p.HostLimits = &limits
 			}
 		}
 		return pr

@@ -15,6 +15,7 @@
 package harness
 
 import (
+	"bytes"
 	"context"
 	"embed"
 	"encoding/json"
@@ -28,6 +29,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/GoogleCloudPlatform/scion/harnesses"
 	"github.com/GoogleCloudPlatform/scion/pkg/agenthome"
 	"github.com/GoogleCloudPlatform/scion/pkg/api"
 	"github.com/GoogleCloudPlatform/scion/pkg/config"
@@ -547,13 +549,17 @@ func (c *ContainerScriptHarness) Provision(ctx context.Context, agentName, agent
 		return fmt.Errorf("stage config.yaml: %w", err)
 	}
 
-	// Copy provision.py if present in the harness-config dir.
-	provisionSrc := filepath.Join(c.configDirPath, "provision.py")
-	if fileExistsHelper(provisionSrc) {
-		if err := copyHarnessConfigFile(provisionSrc, home, path.Join(bundleRel, "provision.py"), 0755); err != nil {
-			return fmt.Errorf("stage provision.py: %w", err)
-		}
+	// The on-disk harness-config is what this server runs. A grok-build
+	// config that still has the pre-trust provision.py, or none at all,
+	// stages the embedded grok-build script from this binary instead.
+	script, source, err := c.provisionScriptSource()
+	if err != nil {
+		return err
 	}
+	if err := home.WriteFile(path.Join(bundleRel, "provision.py"), script, 0755); err != nil {
+		return fmt.Errorf("stage provision.py (%s): %w", source, err)
+	}
+	slog.Info("staged provision.py", "source", source, "harness", c.entry.Harness)
 
 	// Stage capture_auth.py and capture-auth-config.json into the bundle.
 	if err := stageCaptureAuthAssets(home, c.configDirPath, c.entry.Auth); err != nil {
@@ -1188,6 +1194,43 @@ func containerBundlePath(_ string) string {
 //   - injected (or absent): write the binary-embedded copy (legacy behavior).
 //
 // Both modes log the staged source and LIB_VERSION for diagnostics.
+// provisionScriptSource returns the provision.py bytes to stage.
+// A grok-build harness-config whose script does not record workspace
+// folder trust gets the embedded script from this binary. Any other
+// on-disk script is left as the operator installed it.
+func (c *ContainerScriptHarness) provisionScriptSource() ([]byte, string, error) {
+	var disk []byte
+	diskPath := filepath.Join(c.configDirPath, "provision.py")
+	if fileExistsHelper(diskPath) {
+		data, err := os.ReadFile(diskPath)
+		if err != nil {
+			return nil, "", fmt.Errorf("read provision.py: %w", err)
+		}
+		disk = data
+	}
+	embedded, _ := harnesses.FS.ReadFile(c.entry.Harness + "/provision.py")
+	script, source := selectProvisionScript(disk, embedded, c.entry.Harness)
+	if script == nil {
+		return nil, "", fmt.Errorf("provision.py is not in %s and harness %q has no embedded provision.py", c.configDirPath, c.entry.Harness)
+	}
+	return script, source, nil
+}
+
+func selectProvisionScript(disk, embedded []byte, harnessName string) ([]byte, string) {
+	embeddedTrust := bytes.Contains(embedded, []byte("_record_workspace_folder_trust"))
+	diskTrust := bytes.Contains(disk, []byte("_record_workspace_folder_trust"))
+	if len(embedded) > 0 && embeddedTrust && harnessName == "grok-build" && !diskTrust {
+		return embedded, "embedded"
+	}
+	if len(disk) > 0 {
+		return disk, "harness-config"
+	}
+	if len(embedded) > 0 {
+		return embedded, "embedded"
+	}
+	return nil, ""
+}
+
 func (c *ContainerScriptHarness) stageHarnessLib(home *agenthome.Home) error {
 	dst := path.Join(bundleRel, "scion_harness.py")
 	libMode := "injected"

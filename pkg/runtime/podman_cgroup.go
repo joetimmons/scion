@@ -15,6 +15,7 @@
 package runtime
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -22,6 +23,9 @@ import (
 	"strconv"
 	"strings"
 )
+
+// errCgroupMoveDenied means this process cannot join the delegated server cgroup.
+var errCgroupMoveDenied = errors.New("cgroup move denied")
 
 // cgroupMountPath and cgroupSelfFile are the cgroup v2 locations. Tests
 // point them at a temporary tree.
@@ -89,15 +93,24 @@ func joinDelegatedServiceCgroup(parent string) error {
 	domain := path.Dir(server)
 	for _, dir := range []string{cgroupFSPath(domain), cgroupFSPath(server), cgroupFSPath(parent)} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
+			if isPermissionErr(err) {
+				return fmt.Errorf("%w: create cgroup %s: %w", errCgroupMoveDenied, dir, err)
+			}
 			return fmt.Errorf("create cgroup %s: %w", dir, err)
 		}
 	}
 	if err := enableDomainControllers(domain); err != nil {
+		if isPermissionErr(err) {
+			return fmt.Errorf("%w: %w", errCgroupMoveDenied, err)
+		}
 		return err
 	}
 	procs := cgroupFSPath(server) + "/cgroup.procs"
 	f, err := os.OpenFile(procs, os.O_WRONLY|os.O_CREATE, 0o644)
 	if err != nil {
+		if isPermissionErr(err) {
+			return fmt.Errorf("%w: place this server in cgroup %s: %w", errCgroupMoveDenied, server, err)
+		}
 		return fmt.Errorf("place this server in cgroup %s: %w", server, err)
 	}
 	_, werr := f.Write([]byte(strconv.Itoa(os.Getpid())))
@@ -109,6 +122,62 @@ func joinDelegatedServiceCgroup(parent string) error {
 		return fmt.Errorf("place this server in cgroup %s: %w", server, cerr)
 	}
 	return nil
+}
+
+// placePodmanCgroup chooses the cgroup podman will parent containers under.
+// The preferred parent is the requested delegated path, after this process
+// moves to its server sibling. When that move is denied, as it is for a
+// restart from a shell in /agent, containers are parented under a child of
+// the caller's own cgroup if that cgroup already delegates memory, pids,
+// and cpu. Otherwise the caller gets an error and no container is started.
+func placePodmanCgroup(requested string) (string, error) {
+	if runtime.GOOS != "linux" {
+		return requested, nil
+	}
+	err := joinDelegatedServiceCgroup(requested)
+	if err == nil {
+		return requested, nil
+	}
+	if !errors.Is(err, errCgroupMoveDenied) {
+		return "", err
+	}
+	return fallbackCallerCgroup(requested, err)
+}
+
+func fallbackCallerCgroup(requested string, moveErr error) (string, error) {
+	current, err := currentCgroupPath()
+	if err != nil {
+		return "", err
+	}
+	server, _ := delegatedServiceCgroup(requested)
+	ctl := cgroupFSPath(current) + "/cgroup.subtree_control"
+	existing, readErr := os.ReadFile(ctl)
+	if current == "/" || readErr != nil || !cgroupDelegates(existing, "memory", "pids", "cpu") {
+		return "", fmt.Errorf("refusing to start containers without a cgroup limit: cannot move this server into %s (%v), and cgroup %s does not delegate memory, pids, and cpu. Start scion from a shell that can write %s, or delegate those controllers to %s", server, moveErr, current, server, current)
+	}
+	child := path.Clean(current) + "/scion-agents"
+	if err := os.MkdirAll(cgroupFSPath(child), 0o755); err != nil {
+		return "", fmt.Errorf("refusing to start containers without a cgroup limit: cannot create %s under %s: %w", child, current, err)
+	}
+	return child, nil
+}
+
+func isPermissionErr(err error) bool {
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		return os.IsPermission(pathErr.Err)
+	}
+	return os.IsPermission(err)
+}
+
+func cgroupDelegates(control []byte, names ...string) bool {
+	have := string(control)
+	for _, name := range names {
+		if !strings.Contains(have, name) {
+			return false
+		}
+	}
+	return true
 }
 
 func enableDomainControllers(domain string) error {

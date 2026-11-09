@@ -101,3 +101,90 @@ func TestJoinDelegatedServiceCgroupMovesOffAgent(t *testing.T) {
 		t.Fatalf("already-placed server was moved: %q", procs)
 	}
 }
+
+func TestPlacePodmanCgroupDeniedMoveUsesCallerChild(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("cgroup files are linux")
+	}
+	root := t.TempDir()
+	mount := filepath.Join(root, "cgroup")
+	self := filepath.Join(root, "self.cgroup")
+	if err := os.WriteFile(self, []byte("0::/agent\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// /scion-svc exists and is not writable, which is the restart-from-/agent case.
+	locked := filepath.Join(mount, "scion-svc")
+	if err := os.MkdirAll(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	agent := filepath.Join(mount, "agent")
+	if err := os.MkdirAll(agent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agent, "cgroup.subtree_control"), []byte("memory pids cpu\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prevMount, prevSelf := cgroupMountPath, cgroupSelfFile
+	cgroupMountPath, cgroupSelfFile = mount, self
+	t.Cleanup(func() {
+		_ = os.Chmod(locked, 0o755)
+		cgroupMountPath, cgroupSelfFile = prevMount, prevSelf
+	})
+
+	got, err := placePodmanCgroup("/scion-svc/agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "/agent/scion-agents" {
+		t.Fatalf("parent = %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(agent, "scion-agents")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPlacePodmanCgroupDeniedMoveWithoutControllersFailsClosed(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("cgroup files are linux")
+	}
+	root := t.TempDir()
+	mount := filepath.Join(root, "cgroup")
+	self := filepath.Join(root, "self.cgroup")
+	if err := os.WriteFile(self, []byte("0::/agent\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	locked := filepath.Join(mount, "scion-svc")
+	if err := os.MkdirAll(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	agent := filepath.Join(mount, "agent")
+	if err := os.MkdirAll(agent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agent, "cgroup.subtree_control"), []byte("\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prevMount, prevSelf := cgroupMountPath, cgroupSelfFile
+	cgroupMountPath, cgroupSelfFile = mount, self
+	t.Cleanup(func() {
+		_ = os.Chmod(locked, 0o755)
+		cgroupMountPath, cgroupSelfFile = prevMount, prevSelf
+	})
+
+	got, err := placePodmanCgroup("/scion-svc/agents")
+	if err == nil {
+		t.Fatalf("parent %q was accepted without delegated controllers", got)
+	}
+	if !strings.Contains(err.Error(), "without a cgroup limit") {
+		t.Fatalf("error = %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(agent, "scion-agents")); !os.IsNotExist(statErr) {
+		t.Fatalf("child cgroup was created: %v", statErr)
+	}
+}

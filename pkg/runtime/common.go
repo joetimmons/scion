@@ -1763,7 +1763,10 @@ func appendPodmanHostLimits(args []string, cfg *config.V1PodmanConfig) ([]string
 		if err != nil {
 			return nil, fmt.Errorf("invalid podman memory_swap %q: %w", cfg.MemorySwap, err)
 		}
-		args = append(args, "--memory-swap", util.FormatMemoryForDocker(bytes))
+		// Pass a bare byte count. FormatMemoryForDocker turns 1536Mi
+		// (1610612736) into "1536m", and ParseMemory reads the suffix m as
+		// 10^6, which is 1536000000 bytes. Podman accepts the integer.
+		args = append(args, "--memory-swap", strconv.FormatInt(bytes, 10))
 	}
 	for _, extra := range cfg.ExtraRunArgs {
 		if strings.TrimSpace(extra) == "" || strings.ContainsAny(extra, "\n") {

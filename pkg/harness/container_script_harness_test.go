@@ -15,6 +15,7 @@
 package harness
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -73,6 +74,61 @@ func newTestContainerScriptHarness(t *testing.T) (*ContainerScriptHarness, strin
 		t.Fatalf("NewContainerScriptHarness: %v", err)
 	}
 	return h, dir
+}
+
+func TestSelectProvisionScriptUsesEmbeddedGrokTrust(t *testing.T) {
+	embedded := []byte("def _record_workspace_folder_trust(ctx):\n    pass\n")
+	stale := []byte("#!/usr/bin/env python3\nprint('old')\n")
+	custom := []byte("def _record_workspace_folder_trust(ctx):\n    custom()\n")
+
+	got, source := selectProvisionScript(stale, embedded, "grok-build")
+	if source != "embedded" || !bytes.Equal(got, embedded) {
+		t.Fatalf("stale grok-build staged %s", source)
+	}
+	got, source = selectProvisionScript(nil, embedded, "grok-build")
+	if source != "embedded" || !bytes.Equal(got, embedded) {
+		t.Fatalf("missing grok-build staged %s", source)
+	}
+	got, source = selectProvisionScript(custom, embedded, "grok-build")
+	if source != "harness-config" || !bytes.Equal(got, custom) {
+		t.Fatalf("custom grok-build staged %s", source)
+	}
+	got, source = selectProvisionScript(stale, embedded, "testharness")
+	if source != "harness-config" || !bytes.Equal(got, stale) {
+		t.Fatalf("other harness staged %s", source)
+	}
+}
+
+func TestContainerScriptHarness_StagesEmbeddedGrokProvision(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "config.yaml"), "harness: grok-build\nimage: scion-test:latest\n")
+	writeFile(t, filepath.Join(dir, "provision.py"), "#!/usr/bin/env python3\nprint('stale')\n")
+	entry := config.HarnessConfigEntry{
+		Harness: "grok-build",
+		Image:   "scion-test:latest",
+		Provisioner: &config.HarnessProvisionerConfig{
+			Type:    "container-script",
+			Command: []string{"python3", "$HOME/.scion/harness/provision.py"},
+		},
+	}
+	h, err := NewContainerScriptHarness(dir, entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentHome := t.TempDir()
+	if err := h.Provision(context.Background(), "agent1", agentHome, agentHome, "/workspace"); err != nil {
+		t.Fatal(err)
+	}
+	staged, err := os.ReadFile(filepath.Join(agentHome, ".scion", "harness", "provision.py"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(staged, []byte("_record_workspace_folder_trust")) {
+		t.Fatal("staged provision.py does not record workspace folder trust")
+	}
+	if bytes.Contains(staged, []byte("print('stale')")) {
+		t.Fatal("staged the stale on-disk provision.py")
+	}
 }
 
 func TestContainerScriptHarness_BasicGetters(t *testing.T) {

@@ -76,7 +76,7 @@ func TestPodmanRuntime_Run_HostLimits(t *testing.T) {
 		HostLimits: &config.V1PodmanConfig{
 			CgroupParent: "scion.slice",
 			PidsLimit:    "256",
-			MemorySwap:   "1536m",
+			MemorySwap:   "1536Mi",
 			ExtraRunArgs: []string{"--cpuset-cpus", "0-1"},
 		},
 	}
@@ -90,7 +90,7 @@ func TestPodmanRuntime_Run_HostLimits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runtime.Run failed: %v", err)
 	}
-	for _, want := range []string{"--cgroup-parent scion.slice", "--pids-limit 256", "--memory-swap", "--cpuset-cpus", "0-1"} {
+	for _, want := range []string{"--cgroup-parent scion.slice", "--pids-limit 256", "--memory-swap 1610612736", "--cpuset-cpus", "0-1"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected %q in podman args, got %q", want, out)
 		}
