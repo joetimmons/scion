@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 
 	"github.com/GoogleCloudPlatform/scion/pkg/api"
 	"github.com/GoogleCloudPlatform/scion/pkg/config"
@@ -316,6 +317,15 @@ func (s runtimeSelection) build() Runtime {
 				p.Host = rtConfig.Host
 			}
 			p.HostLimits = rtConfig.Podman
+			if p.HostLimits != nil && strings.HasPrefix(p.HostLimits.CgroupParent, "/") {
+				// An absolute parent is the delegated agents cgroup. Move
+				// this process to its server sibling before any container
+				// is created, including after a restart from a shell that
+				// is still inside that agents cgroup.
+				if err := joinDelegatedServiceCgroup(p.HostLimits.CgroupParent); err != nil {
+					return &ErrorRuntime{Err: err}
+				}
+			}
 		}
 		return pr
 	case "kubernetes", "k8s":
