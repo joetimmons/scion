@@ -25,14 +25,16 @@ import (
 
 	"github.com/GoogleCloudPlatform/scion/pkg/agent/state"
 	"github.com/GoogleCloudPlatform/scion/pkg/api"
+	"github.com/GoogleCloudPlatform/scion/pkg/config"
 	"github.com/GoogleCloudPlatform/scion/pkg/projectkeys"
 	"github.com/GoogleCloudPlatform/scion/pkg/util"
 )
 
 type PodmanRuntime struct {
-	Command  string
-	Host     string
-	Rootless bool // true when Podman is running in rootless mode
+	Command    string
+	Host       string
+	Rootless   bool // true when Podman is running in rootless mode
+	HostLimits *config.V1PodmanConfig
 }
 
 // NewPodmanRuntime creates a new PodmanRuntime after verifying that the podman
@@ -196,6 +198,10 @@ func (r *PodmanRuntime) Run(ctx context.Context, config RunConfig) (string, erro
 	if err != nil {
 		return "", err
 	}
+	newArgs, err = appendPodmanHostLimits(newArgs, r.HostLimits)
+	if err != nil {
+		return "", err
+	}
 
 	newArgs = appendSharedDirGroupArgs(newArgs, config, podmanRuntimeName(r.Rootless), !r.Rootless)
 
@@ -209,22 +215,19 @@ func (r *PodmanRuntime) Run(ctx context.Context, config RunConfig) (string, erro
 	if err := hooks.checkpoint(ctx, CheckpointStepLaunching); err != nil {
 		return "", err
 	}
-	out, err := runSimpleCommand(ctx, r.Command, newArgs...)
-	if err != nil {
-		if ctx.Err() != nil {
-			// The caller gave up while the daemon may still have been
-			// creating/starting the container. Clean up any partial result
-			// instead of leaking it. See ptone/scion#1886.
-			rollbackCancelledCreate(r.Command, config.Name, config.Labels[api.LabelRunID])
-			return "", ctx.Err()
-		}
-		return "", fmt.Errorf("container run failed: %w (output: %s)", err, out)
+	stdout, stderr, err := runCommandSeparated(ctx, r.Command, newArgs...)
+	if err != nil && ctx.Err() != nil {
+		// The caller gave up while the daemon may still have been
+		// creating/starting the container. Clean up any partial result
+		// instead of leaking it. See ptone/scion#1886.
+		rollbackCancelledCreate(r.Command, config.Name, config.Labels[api.LabelRunID])
+		return "", ctx.Err()
 	}
-
-	// Run returns the whole trimmed output, as before; only the launch
-	// handle is restricted to a well-formed container ID line.
-	id := strings.TrimSpace(out)
-	reportContainerCreated(hooks, config.Name, out)
+	id, err := containerRunResult(stdout, stderr, err)
+	if err != nil {
+		return "", err
+	}
+	reportContainerCreated(hooks, config.Name, stdout)
 	return id, nil
 }
 

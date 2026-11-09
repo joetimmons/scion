@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 
 	"github.com/GoogleCloudPlatform/scion/pkg/api"
 	"github.com/GoogleCloudPlatform/scion/pkg/config"
@@ -311,9 +312,22 @@ func (s runtimeSelection) build() Runtime {
 			}
 		}
 		pr := NewPodmanRuntime(podmanCmd)
-		if rtConfig.Host != "" {
-			if p, ok := pr.(*PodmanRuntime); ok {
+		if p, ok := pr.(*PodmanRuntime); ok {
+			if rtConfig.Host != "" {
 				p.Host = rtConfig.Host
+			}
+			p.HostLimits = rtConfig.Podman
+			if p.HostLimits != nil && strings.HasPrefix(p.HostLimits.CgroupParent, "/") {
+				// Copy before rewriting the parent. The settings value stays
+				// /scion-svc/agents; the runtime uses a writable child when
+				// this process cannot move into /scion-svc/server.
+				limits := *p.HostLimits
+				parent, err := placePodmanCgroup(limits.CgroupParent)
+				if err != nil {
+					return &ErrorRuntime{Err: err}
+				}
+				limits.CgroupParent = parent
+				p.HostLimits = &limits
 			}
 		}
 		return pr

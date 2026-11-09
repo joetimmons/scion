@@ -250,9 +250,10 @@ func TestContainerDeleteResource_MissingAndInvalidHandles(t *testing.T) {
 	}
 }
 
-// TestContainerRun_HandleIDIgnoresWarningLines: the run output interleaves
-// stdout and stderr, so a warning line must not end up in the handle; with
-// no well-formed ID in the output no handle is recorded.
+// TestContainerRun_HandleIDIgnoresWarningLines: a warning on stderr must
+// not join the container ID that Run returns or the launch handle records.
+// Stdout that is not itself an ID is returned without stderr, and no
+// handle is recorded.
 func TestContainerRun_HandleIDIgnoresWarningLines(t *testing.T) {
 	const fullID = "a3f1c2d4e5b60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90"
 	for _, tc := range []struct {
@@ -282,8 +283,12 @@ func TestContainerRun_HandleIDIgnoresWarningLines(t *testing.T) {
 				config := containerHookConfig()
 				var handles []api.ResourceHandle
 				config.OnResourceCreated = func(h api.ResourceHandle) { handles = append(handles, h) }
-				if _, err := rc.new(cli).Run(context.Background(), config); err != nil {
+				id, err := rc.new(cli).Run(context.Background(), config)
+				if err != nil {
 					t.Fatalf("Run: %v", err)
+				}
+				if strings.Contains(id, "TTY") {
+					t.Fatalf("Run returned stderr inside the container ID: %q", id)
 				}
 				if tc.wantUID == "" {
 					if len(handles) != 0 {
@@ -291,11 +296,60 @@ func TestContainerRun_HandleIDIgnoresWarningLines(t *testing.T) {
 					}
 					return
 				}
+				if id != tc.wantUID {
+					t.Fatalf("Run returned %q, want %q", id, tc.wantUID)
+				}
 				if len(handles) != 1 || handles[0].UID != tc.wantUID {
 					t.Fatalf("handles = %+v, want UID %q", handles, tc.wantUID)
 				}
 			})
 		}
+	}
+}
+
+// TestContainerRun_StderrWarningIsNotTheContainerID: Podman writes its
+// non-TTY warning to stderr while the container ID stays on stdout. Run
+// must return only that ID. A non-zero exit stays a failure even when
+// stdout printed an ID.
+func TestContainerRun_StderrWarningIsNotTheContainerID(t *testing.T) {
+	const fullID = "a3f1c2d4e5b60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90"
+	warnBody := `printf '%s\n' 'time="2026-11-07T22:00:00Z" level=warning msg="The input device is not a TTY"' >&2; echo ` + fullID
+	for _, rc := range containerRuntimeCases()[:2] {
+		t.Run(rc.name+"/stderr warning", func(t *testing.T) {
+			cli, _ := writeMockContainerCLIRun(t, "", warnBody)
+			config := containerHookConfig()
+			var handles []api.ResourceHandle
+			config.OnResourceCreated = func(h api.ResourceHandle) { handles = append(handles, h) }
+			id, err := rc.new(cli).Run(context.Background(), config)
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if id != fullID {
+				t.Fatalf("Run returned %q, want only the container ID", id)
+			}
+			if strings.Contains(id, "warning") || strings.Contains(id, "TTY") {
+				t.Fatalf("Run returned a warning inside the container ID: %q", id)
+			}
+			if len(handles) != 1 || handles[0].UID != fullID {
+				t.Fatalf("handles = %+v, want UID %q", handles, fullID)
+			}
+		})
+		t.Run(rc.name+"/nonzero exit", func(t *testing.T) {
+			cli, _ := writeMockContainerCLIRun(t, "", warnBody+"; exit 1")
+			config := containerHookConfig()
+			var handles []api.ResourceHandle
+			config.OnResourceCreated = func(h api.ResourceHandle) { handles = append(handles, h) }
+			id, err := rc.new(cli).Run(context.Background(), config)
+			if err == nil {
+				t.Fatalf("Run returned %q, want a failure when the runtime exits non-zero", id)
+			}
+			if id != "" {
+				t.Fatalf("failed Run returned ID %q, want none", id)
+			}
+			if len(handles) != 0 {
+				t.Fatalf("handles = %+v, want none after a failed create", handles)
+			}
+		})
 	}
 }
 

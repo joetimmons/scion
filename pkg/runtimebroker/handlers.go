@@ -1330,7 +1330,12 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 	// hash-only, or no resolver) and must not trigger another attempt.
 	var hydratedTemplatePath, hydratedHCPath string
 	var tplHydrated, hcHydrated bool
-	if req.GatherEnv && !req.NoAuth {
+	// Role none sets NoAuth, which skips Hub secrets. An explicit harness
+	// auth type on the same request is a separate ask: gather that type's
+	// required env (XAI_API_KEY for api-key) instead of starting the
+	// harness with no credential. Hub secrets stay suppressed.
+	gatherExplicitAuth := req.NoAuth && req.Config != nil && harness.ExplicitCredentialAuth(req.Config.HarnessAuth)
+	if req.GatherEnv && (!req.NoAuth || gatherExplicitAuth) {
 		// A profile the Hub's stored profiles cannot resolve fails the
 		// create at buildStartContext anyway; report it here, before the
 		// auth and env checks below, so a create whose default runtime
@@ -6629,7 +6634,15 @@ func (s *Server) extractRequiredEnvKeys(req CreateAgentRequest, hydratedTemplate
 		if len(hydratedHarnessConfigPath) > 0 {
 			hydratedHCPath = hydratedHarnessConfigPath[0]
 		}
-		if hcProjectDir := harnessConfigProjectTier(req.ProjectPath); hydratedHCPath != "" || hcProjectDir != "" {
+		// A hub-managed workspace root with no .scion entry has an empty
+		// project tier. The harness-config can still live in the global
+		// directory, which is where a workstation sync of a global bundle
+		// is read. Skipping the lookup in that case dropped the bundle's
+		// auth.types, so env-gather asked for nothing and the harness
+		// started without the credential. An empty project tier still
+		// resolves a hydrated copy, then the global directory.
+		hcProjectDir := harnessConfigProjectTier(req.ProjectPath)
+		if hydratedHCPath != "" || hcProjectDir != "" || harnessConfigName != "" {
 			if hcDir, err := config.ResolveHarnessConfigDir(hydratedHCPath, harnessConfigName, hcProjectDir, harnessConfigTemplatePaths...); err == nil && hcDir != nil {
 				harnessType = hcDir.Config.Harness
 				authType = hcDir.Config.AuthSelectedType

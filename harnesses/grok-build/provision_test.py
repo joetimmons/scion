@@ -2354,5 +2354,96 @@ class NativeSystemPromptTest(unittest.TestCase):
                 self.assertFalse(os.path.isfile(target))
 
 
+class WorkspaceFolderTrustTest(unittest.TestCase):
+    """Folder trust is the assigned workspace, not a permission bypass."""
+
+    def test_records_only_the_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = os.path.join(tmp, "home")
+            workspace = os.path.join(tmp, "workspace")
+            os.makedirs(home)
+            os.makedirs(workspace)
+            ctx = _make_ctx({"agent_workspace": workspace})
+            with temporary_home(home):
+                provision._record_workspace_folder_trust(ctx)
+                path = os.path.join(home, ".grok", "trusted_folders.toml")
+                with open(path, "rb") as fh:
+                    parsed = tomllib.load(fh)
+            folders = parsed["folders"]
+            self.assertEqual(set(folders), {workspace})
+            self.assertIs(folders[workspace]["trusted"], True)
+            self.assertNotIn("/", folders)
+            self.assertNotIn(home, folders)
+
+    def test_refuses_symlink_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = os.path.join(tmp, "home")
+            real = os.path.join(tmp, "real")
+            link = os.path.join(tmp, "link")
+            os.makedirs(home)
+            os.makedirs(real)
+            os.symlink(real, link)
+            ctx = _make_ctx({"agent_workspace": link})
+            with temporary_home(home):
+                provision._record_workspace_folder_trust(ctx)
+                self.assertFalse(
+                    os.path.isfile(os.path.join(home, ".grok", "trusted_folders.toml"))
+                )
+
+    def test_refuses_ancestor_dotdot_and_symlinked_trust_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = os.path.join(tmp, "home", "user")
+            os.makedirs(home)
+            ancestor = os.path.join(tmp, "home")
+            with temporary_home(home):
+                provision._record_workspace_folder_trust(_make_ctx({"agent_workspace": ancestor}))
+                dotted = os.path.join(tmp, "home", "user", "..", "user", "ws")
+                os.makedirs(os.path.join(tmp, "home", "user", "ws"))
+                provision._record_workspace_folder_trust(_make_ctx({"agent_workspace": dotted}))
+                grok = os.path.join(home, ".grok")
+                os.makedirs(grok)
+                real = os.path.join(tmp, "real.toml")
+                open(real, "w").close()
+                os.symlink(real, os.path.join(grok, "trusted_folders.toml"))
+                workspace = os.path.join(tmp, "workspace")
+                os.makedirs(workspace)
+                provision._record_workspace_folder_trust(_make_ctx({"agent_workspace": workspace}))
+                self.assertTrue(os.path.islink(os.path.join(grok, "trusted_folders.toml")))
+                self.assertEqual(os.path.getsize(real), 0)
+
+    def test_refuses_filesystem_root_and_home(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = os.path.join(tmp, "home")
+            os.makedirs(home)
+            with temporary_home(home):
+                for broad in ("/", home):
+                    ctx = _make_ctx({"agent_workspace": broad})
+                    provision._record_workspace_folder_trust(ctx)
+                self.assertFalse(os.path.isfile(os.path.join(home, ".grok", "trusted_folders.toml")))
+
+    def test_preserves_another_folder_and_does_not_enable_yolo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = os.path.join(tmp, "home")
+            workspace = os.path.join(tmp, "workspace")
+            os.makedirs(home)
+            os.makedirs(workspace)
+            grok = os.path.join(home, ".grok")
+            os.makedirs(grok)
+            other = os.path.join(tmp, "other")
+            with open(os.path.join(grok, "trusted_folders.toml"), "w", encoding="utf-8") as fh:
+                fh.write(f'[folders."{other}"]\ntrusted = true\ndecided_at = 1\n')
+            ctx = _make_ctx({"agent_workspace": workspace})
+            with temporary_home(home):
+                provision._record_workspace_folder_trust(ctx)
+                with open(os.path.join(grok, "trusted_folders.toml"), "rb") as fh:
+                    parsed = tomllib.load(fh)
+                config = os.path.join(grok, "config.toml")
+            self.assertNotIn(other, parsed["folders"])
+            self.assertIs(parsed["folders"][workspace]["trusted"], True)
+            self.assertEqual(set(parsed["folders"]), {workspace})
+            self.assertEqual(os.stat(os.path.join(grok, "trusted_folders.toml")).st_mode & 0o777, 0o600)
+            self.assertFalse(os.path.isfile(config))
+
+
 if __name__ == "__main__":
     unittest.main()

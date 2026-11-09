@@ -2533,6 +2533,16 @@ authDone:
 	// In no-auth mode the harness-config's no-auth env (its bundle's
 	// no-auth-env.yaml) joins the container env; api-key and auth-file
 	// starts never carry it.
+	// An explicit harness auth type whose config requires a credential must
+	// not fall through to the harness command. Role none sets NoAuth, and
+	// a harness config with no no_auth behavior would otherwise exec grok,
+	// which opens device login. The broker clears NoAuth for that explicit
+	// type after env-gather; this remains the backstop when it does not.
+	if opts.NoAuth && harness.ExplicitCredentialAuth(opts.HarnessAuth) &&
+		!noAuthModeActive(opts.NoAuth, noAuthConfig) &&
+		len(harness.RequiredAuthEnvKeysFromConfig(resolvedHarnessConfigAuth, opts.HarnessAuth)) > 0 {
+		return nil, fmt.Errorf("harness auth %q was requested but no credential was gathered and the harness has no no-auth command; refusing to launch it", opts.HarnessAuth)
+	}
 	noAuthActive := noAuthModeActive(opts.NoAuth, noAuthConfig)
 	var noAuthEnvWarnings []string
 	agentEnv, noAuthEnvWarnings = applyNoAuthEnv(agentEnv, noAuthConfig, noAuthActive, opts.Name)

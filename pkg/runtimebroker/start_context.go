@@ -30,6 +30,7 @@ import (
 	"github.com/GoogleCloudPlatform/scion/pkg/agent"
 	"github.com/GoogleCloudPlatform/scion/pkg/api"
 	"github.com/GoogleCloudPlatform/scion/pkg/config"
+	"github.com/GoogleCloudPlatform/scion/pkg/harness"
 	"github.com/GoogleCloudPlatform/scion/pkg/provision"
 	"github.com/GoogleCloudPlatform/scion/pkg/runtime"
 	"github.com/GoogleCloudPlatform/scion/pkg/secret"
@@ -1408,6 +1409,23 @@ func (s *Server) buildStartContext(ctx context.Context, in startContextInputs) (
 	// here, per start, and gathered by the agent manager once the harness
 	// auth metadata is known (pkg/agent/run.go). Never persisted.
 	opts.HostCredentialFiles = s.colocatedHostCredentials(ctx, in.HTTPRequest, hubConn)
+	// Role none arrives as NoAuth and would skip harness auth after this
+	// point, so an explicit --harness-auth api-key never stages its key and
+	// the harness process starts anyway (grok opens device login). Hub
+	// secrets were already dropped above. Keep host credential files and
+	// ADC off, and run harness auth for the explicit type only.
+	if in.NoAuth && in.Config != nil && harness.ExplicitCredentialAuth(in.Config.HarnessAuth) {
+		opts.NoAuth = false
+		opts.HostCredentialFiles = false
+		var filtered []api.ResolvedSecret
+		for _, rs := range opts.ResolvedSecrets {
+			if rs.Name == "gcloud-adc" {
+				continue
+			}
+			filtered = append(filtered, rs)
+		}
+		opts.ResolvedSecrets = filtered
+	}
 
 	// --- Manager resolution ---
 	// mgr and dispatchRuntimeType were already resolved once, above, for the
