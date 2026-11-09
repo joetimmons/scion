@@ -2957,6 +2957,20 @@ type V1RuntimeConfig struct {
 	// ServiceAccount. A profile's own value wins over this one; see
 	// VersionedSettings.ResolveKubernetesBlockServiceAccountForSelection.
 	KubernetesBlockServiceAccount string `json:"kubernetes_block_service_account,omitempty" yaml:"kubernetes_block_service_account,omitempty" koanf:"kubernetes_block_service_account"`
+	// Podman holds host limits applied to every container this runtime starts.
+	// scion server start and restart read settings again, so the values survive
+	// without a wrapper around the podman binary.
+	Podman *V1PodmanConfig `json:"podman,omitempty" yaml:"podman,omitempty" koanf:"podman"`
+}
+
+// V1PodmanConfig is operator configuration for Podman container creates.
+// ExtraRunArgs are appended to `podman run` after the built-in flags.
+// They are settings, not agent input.
+type V1PodmanConfig struct {
+	CgroupParent string   `json:"cgroup_parent,omitempty" yaml:"cgroup_parent,omitempty" koanf:"cgroup_parent"`
+	PidsLimit    string   `json:"pids_limit,omitempty" yaml:"pids_limit,omitempty" koanf:"pids_limit"`
+	MemorySwap   string   `json:"memory_swap,omitempty" yaml:"memory_swap,omitempty" koanf:"memory_swap"`
+	ExtraRunArgs []string `json:"extra_run_args,omitempty" yaml:"extra_run_args,omitempty" koanf:"extra_run_args"`
 }
 
 // V1RuntimeDefaultsConfig holds runtime-wide behaviour that is not specific to

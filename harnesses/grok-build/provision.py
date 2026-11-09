@@ -492,6 +492,28 @@ enabled = false
 # END SCION MANAGED"""
 
 
+def _path_has_symlink_component(path: str) -> bool:
+    current = os.path.abspath(os.sep)
+    for part in path.split(os.sep):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            return True
+        current = os.path.join(current, part)
+        if os.path.islink(current):
+            return True
+    return False
+
+
+def _is_ancestor(folder: str, home: str) -> bool:
+    """True when folder contains home, including the filesystem root."""
+    folder = os.path.abspath(folder)
+    home = os.path.abspath(home)
+    if folder in ("/", home):
+        return folder == "/"
+    return home.startswith(folder + os.sep)
+
+
 def _record_workspace_folder_trust(ctx: scion_harness.ProvisionContext) -> None:
     """Trust the assigned workspace in ~/.grok/trusted_folders.toml.
 
@@ -504,13 +526,16 @@ def _record_workspace_folder_trust(ctx: scion_harness.ProvisionContext) -> None:
     if not raw or not os.path.isabs(raw):
         ctx.info("folder trust skipped: workspace path is not absolute")
         return
+    if any(part == ".." for part in raw.split(os.sep)):
+        ctx.info("folder trust skipped: workspace path contains '..'")
+        return
     folder = os.path.abspath(raw)
     home = os.path.abspath(ctx.home)
     grok_home = os.path.abspath(_grok_config_dir(ctx))
-    if os.path.islink(raw) or os.path.realpath(folder) != folder:
+    if _path_has_symlink_component(raw) or os.path.realpath(folder) != folder:
         ctx.info("folder trust skipped: workspace path is a symlink or changes through one")
         return
-    if folder in ("/", home, grok_home):
+    if folder == "/" or folder == home or folder == grok_home or _is_ancestor(folder, home):
         ctx.info("folder trust skipped: refusing an over-broad path")
         return
     if '"' in folder or "\n" in folder:
@@ -518,6 +543,9 @@ def _record_workspace_folder_trust(ctx: scion_harness.ProvisionContext) -> None:
         return
 
     path = os.path.join(grok_home, "trusted_folders.toml")
+    if os.path.islink(path):
+        ctx.info("folder trust skipped: trust file is a symlink")
+        return
     os.makedirs(grok_home, exist_ok=True)
     folders: dict[str, dict[str, Any]] = {}
     if os.path.isfile(path):
@@ -528,14 +556,11 @@ def _record_workspace_folder_trust(ctx: scion_harness.ProvisionContext) -> None:
             raw_folders = parsed.get("folders") if isinstance(parsed, dict) else None
             if isinstance(raw_folders, dict):
                 for key, entry in raw_folders.items():
-                    if isinstance(key, str) and isinstance(entry, dict):
+                    if isinstance(key, str) and isinstance(entry, dict) and entry.get("trusted") is not True:
                         folders[key] = dict(entry)
         except (OSError, ValueError):
             ctx.info("folder trust skipped: existing trust store could not be read")
             return
-    current = folders.get(folder, {})
-    if current.get("trusted") is True:
-        return
     folders[folder] = {"trusted": True, "decided_at": int(time.time())}
     lines: list[str] = []
     for key in sorted(folders):
@@ -548,8 +573,10 @@ def _record_workspace_folder_trust(ctx: scion_harness.ProvisionContext) -> None:
             lines.append(f"decided_at = {decided}")
         lines.append("")
     try:
-        with open(path, "w", encoding="utf-8") as fh:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write("\n".join(lines))
+        os.chmod(path, 0o600)
     except OSError as exc:
         ctx.info(f"folder trust skipped: could not write {path}: {exc}")
 

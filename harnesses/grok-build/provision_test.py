@@ -2390,6 +2390,27 @@ class WorkspaceFolderTrustTest(unittest.TestCase):
                     os.path.isfile(os.path.join(home, ".grok", "trusted_folders.toml"))
                 )
 
+    def test_refuses_ancestor_dotdot_and_symlinked_trust_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = os.path.join(tmp, "home", "user")
+            os.makedirs(home)
+            ancestor = os.path.join(tmp, "home")
+            with temporary_home(home):
+                provision._record_workspace_folder_trust(_make_ctx({"agent_workspace": ancestor}))
+                dotted = os.path.join(tmp, "home", "user", "..", "user", "ws")
+                os.makedirs(os.path.join(tmp, "home", "user", "ws"))
+                provision._record_workspace_folder_trust(_make_ctx({"agent_workspace": dotted}))
+                grok = os.path.join(home, ".grok")
+                os.makedirs(grok)
+                real = os.path.join(tmp, "real.toml")
+                open(real, "w").close()
+                os.symlink(real, os.path.join(grok, "trusted_folders.toml"))
+                workspace = os.path.join(tmp, "workspace")
+                os.makedirs(workspace)
+                provision._record_workspace_folder_trust(_make_ctx({"agent_workspace": workspace}))
+                self.assertTrue(os.path.islink(os.path.join(grok, "trusted_folders.toml")))
+                self.assertEqual(os.path.getsize(real), 0)
+
     def test_refuses_filesystem_root_and_home(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = os.path.join(tmp, "home")
@@ -2417,8 +2438,10 @@ class WorkspaceFolderTrustTest(unittest.TestCase):
                 with open(os.path.join(grok, "trusted_folders.toml"), "rb") as fh:
                     parsed = tomllib.load(fh)
                 config = os.path.join(grok, "config.toml")
-            self.assertIs(parsed["folders"][other]["trusted"], True)
+            self.assertNotIn(other, parsed["folders"])
             self.assertIs(parsed["folders"][workspace]["trusted"], True)
+            self.assertEqual(set(parsed["folders"]), {workspace})
+            self.assertEqual(os.stat(os.path.join(grok, "trusted_folders.toml")).st_mode & 0o777, 0o600)
             self.assertFalse(os.path.isfile(config))
 
 

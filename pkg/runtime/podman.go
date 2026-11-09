@@ -25,14 +25,16 @@ import (
 
 	"github.com/GoogleCloudPlatform/scion/pkg/agent/state"
 	"github.com/GoogleCloudPlatform/scion/pkg/api"
+	"github.com/GoogleCloudPlatform/scion/pkg/config"
 	"github.com/GoogleCloudPlatform/scion/pkg/projectkeys"
 	"github.com/GoogleCloudPlatform/scion/pkg/util"
 )
 
 type PodmanRuntime struct {
-	Command  string
-	Host     string
-	Rootless bool // true when Podman is running in rootless mode
+	Command    string
+	Host       string
+	Rootless   bool // true when Podman is running in rootless mode
+	HostLimits *config.V1PodmanConfig
 }
 
 // NewPodmanRuntime creates a new PodmanRuntime after verifying that the podman
@@ -193,6 +195,10 @@ func (r *PodmanRuntime) Run(ctx context.Context, config RunConfig) (string, erro
 	// here — affected deployments must set
 	// `runtime.enforce_resource_defaults: false` until it lands.
 	newArgs, err = appendContainerResourceArgs(newArgs, config.Resources)
+	if err != nil {
+		return "", err
+	}
+	newArgs, err = appendPodmanHostLimits(newArgs, r.HostLimits)
 	if err != nil {
 		return "", err
 	}

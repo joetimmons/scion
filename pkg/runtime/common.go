@@ -1742,6 +1742,38 @@ func syncGCSVolumes(ctx context.Context, encoded string, direction SyncDirection
 	return nil
 }
 
+func appendPodmanHostLimits(args []string, cfg *config.V1PodmanConfig) ([]string, error) {
+	if cfg == nil {
+		return args, nil
+	}
+	if cfg.CgroupParent != "" {
+		if strings.ContainsAny(cfg.CgroupParent, " \t\n") {
+			return nil, fmt.Errorf("invalid podman cgroup_parent %q", cfg.CgroupParent)
+		}
+		args = append(args, "--cgroup-parent", cfg.CgroupParent)
+	}
+	if cfg.PidsLimit != "" {
+		if strings.ContainsAny(cfg.PidsLimit, " \t\n") {
+			return nil, fmt.Errorf("invalid podman pids_limit %q", cfg.PidsLimit)
+		}
+		args = append(args, "--pids-limit", cfg.PidsLimit)
+	}
+	if cfg.MemorySwap != "" {
+		bytes, err := util.ParseMemory(cfg.MemorySwap)
+		if err != nil {
+			return nil, fmt.Errorf("invalid podman memory_swap %q: %w", cfg.MemorySwap, err)
+		}
+		args = append(args, "--memory-swap", util.FormatMemoryForDocker(bytes))
+	}
+	for _, extra := range cfg.ExtraRunArgs {
+		if strings.TrimSpace(extra) == "" || strings.ContainsAny(extra, "\n") {
+			return nil, fmt.Errorf("invalid podman extra_run_arg %q", extra)
+		}
+		args = append(args, extra)
+	}
+	return args, nil
+}
+
 func appendContainerResourceArgs(args []string, resources *api.ResourceSpec) ([]string, error) {
 	if resources == nil {
 		return args, nil

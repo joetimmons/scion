@@ -64,6 +64,39 @@ echo "$@"
 	}
 }
 
+func TestPodmanRuntime_Run_HostLimits(t *testing.T) {
+	tmpDir := t.TempDir()
+	mockPodman := filepath.Join(tmpDir, "mock-podman")
+	script := "#!/bin/sh\necho \"$@\"\n"
+	if err := os.WriteFile(mockPodman, []byte(script), 0755); err != nil {
+		t.Fatalf("failed to write mock podman: %v", err)
+	}
+	rt := &PodmanRuntime{
+		Command: mockPodman,
+		HostLimits: &config.V1PodmanConfig{
+			CgroupParent: "scion.slice",
+			PidsLimit:    "256",
+			MemorySwap:   "1536m",
+			ExtraRunArgs: []string{"--cpuset-cpus", "0-1"},
+		},
+	}
+	out, err := rt.Run(context.Background(), RunConfig{
+		Harness:      &harness.Generic{},
+		Name:         "test-agent",
+		UnixUsername: "scion",
+		Image:        "scion-agent:latest",
+		Task:         "hello",
+	})
+	if err != nil {
+		t.Fatalf("runtime.Run failed: %v", err)
+	}
+	for _, want := range []string{"--cgroup-parent scion.slice", "--pids-limit 256", "--memory-swap", "--cpuset-cpus", "0-1"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q in podman args, got %q", want, out)
+		}
+	}
+}
+
 func TestPodmanRuntime_Exec_UserFlag(t *testing.T) {
 	// Create a temporary script to act as a mock podman
 	tmpDir := t.TempDir()

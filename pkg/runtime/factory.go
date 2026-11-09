@@ -311,10 +311,11 @@ func (s runtimeSelection) build() Runtime {
 			}
 		}
 		pr := NewPodmanRuntime(podmanCmd)
-		if rtConfig.Host != "" {
-			if p, ok := pr.(*PodmanRuntime); ok {
+		if p, ok := pr.(*PodmanRuntime); ok {
+			if rtConfig.Host != "" {
 				p.Host = rtConfig.Host
 			}
+			p.HostLimits = rtConfig.Podman
 		}
 		return pr
 	case "kubernetes", "k8s":
